@@ -1176,10 +1176,10 @@ pub(super) mod avx2 {
         // = row N+4 i16x8). Unpack i16 → i32 with sign-extend, store as
         // 8 i32 per row.
         let out_ptr = out.as_mut_ptr() as *mut __m256i;
-        store_row_as_i32(r0_4, out_ptr.add(0), out_ptr.add(8));
-        store_row_as_i32(r1_5, out_ptr.add(2), out_ptr.add(10));
-        store_row_as_i32(r2_6, out_ptr.add(4), out_ptr.add(12));
-        store_row_as_i32(r3_7, out_ptr.add(6), out_ptr.add(14));
+        store_row_as_i32(r0_4, out_ptr.add(0), out_ptr.add(4));
+        store_row_as_i32(r1_5, out_ptr.add(1), out_ptr.add(5));
+        store_row_as_i32(r2_6, out_ptr.add(2), out_ptr.add(6));
+        store_row_as_i32(r3_7, out_ptr.add(3), out_ptr.add(7));
 
         _mm256_zeroupper();
     }
