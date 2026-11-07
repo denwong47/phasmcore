@@ -107,8 +107,8 @@ pub fn armor_encode(
     message: &str,
     passphrase: &str,
 ) -> Result<Vec<u8>, StegoError> {
-    armor_encode_impl(image_bytes, message, passphrase, &ArmorEncodeOpts::default(), &mut ArmorEncodeInfo::default())
-        .map(|(bytes, _)| bytes)
+    armor_encode_with_opts(image_bytes, message, passphrase, &ArmorEncodeOpts::default())
+        .map(|(bytes, ..)| bytes)
 }
 
 /// Encode with Armor mode and return the encode quality score.
@@ -117,20 +117,64 @@ pub fn armor_encode_with_quality(
     message: &str,
     passphrase: &str,
 ) -> Result<(Vec<u8>, EncodeQuality), StegoError> {
-    armor_encode_impl(image_bytes, message, passphrase, &ArmorEncodeOpts::default(), &mut ArmorEncodeInfo::default())
+    armor_encode_with_opts(image_bytes, message, passphrase, &ArmorEncodeOpts::default()).map(|(vec, quality, _)| (vec, quality))
 }
 
 /// Armor encode with the user's "Standard" switch: `force_standard` skips
 /// Fortress even when the message fits it (fix list 2.8 / C7). The returned
 /// quality's `fortress` is the sub-mode actually used.
-pub fn armor_encode_with_options(
+pub fn armor_encode_with_forced_standard(
     image_bytes: &[u8],
     message: &str,
     passphrase: &str,
     force_standard: bool,
 ) -> Result<(Vec<u8>, EncodeQuality), StegoError> {
     let opts = ArmorEncodeOpts { force_stdm: force_standard, ..ArmorEncodeOpts::default() };
-    armor_encode_impl(image_bytes, message, passphrase, &opts, &mut ArmorEncodeInfo::default())
+    armor_encode_with_opts(image_bytes, message, passphrase, &opts).map(|(vec, quality, _)| (vec, quality))
+}
+
+/// A proxy for [`armor_encode_with_forced_standard`].
+///
+/// This function exists for backward compatibility and will be removed in future versions
+/// to avoid confusion with [`armor_encode_with_opts`], which provides more granular
+/// control over encoding options.
+#[deprecated(note = "Use `armor_encode_with_forced_standard` instead")]
+pub fn armor_encode_with_options(
+    image_bytes: &[u8],
+    message: &str,
+    passphrase: &str,
+    force_standard: bool,
+) -> Result<(Vec<u8>, EncodeQuality), StegoError> {
+    armor_encode_with_forced_standard(image_bytes, message, passphrase, force_standard)
+}
+
+/// Lowest level public Armor encode function that takes explicit encoding options.
+/// Contrary to the other Armor encode functions, this one exposes the full set of
+/// encoding options through [`ArmorEncodeOpts`], and returns detailed encoding
+/// information via [`ArmorEncodeInfo`].
+///
+/// [`ArmorEncodeOpts`] is a pub struct that allows the caller to specify detailed
+/// encoding options for the Armor v2 prototype.
+///
+/// Use this function when you need full control over the encoding options and want to
+/// obtain detailed encoding information.
+///
+/// # Errors
+/// As [`armor_encode`], plus [`StegoError::MessageTooLarge`] when
+/// [`ArmorEncodeOpts::fortress_tl`] is [`EncodePreference::Forced`] and the message
+/// does not fit Fortress TL on this cover.
+///
+/// # See Also
+/// - [`ArmorEncodeOpts`] for specifying detailed encoding options for the Armor v2 prototype.
+pub fn armor_encode_with_opts(
+    image_bytes: &[u8],
+    message: &str,
+    passphrase: &str,
+    opts: &ArmorEncodeOpts,
+) -> Result<(Vec<u8>, EncodeQuality, ArmorEncodeInfo), StegoError> {
+    let mut info = ArmorEncodeInfo::default();
+    armor_encode_impl(image_bytes, message, passphrase, opts, &mut info)
+        .map(|(vec, quality)| (vec, quality, info))
 }
 
 /// STDM wire variant written by the encoder (prototype switch, 2026-10-31).
@@ -148,7 +192,41 @@ pub enum StdmVariant {
     V2,
 }
 
+/// Whether the Armor encoder may use an optional embedding mode. Currently used
+/// for Fortress TL ([`ArmorEncodeOpts::fortress_tl`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
+pub enum EncodePreference {
+    /// Let the encoder decide from the frame size (the default). For Fortress
+    /// TL: used only when the message is too long for Fortress T.
+    #[default]
+    ByFrameSize,
+
+    /// Always use the mode. If the message does not fit it, the encode fails
+    /// with [`StegoError::MessageTooLarge`] instead of falling back.
+    Forced,
+
+    /// Never use the mode.
+    Never,
+}
+
 /// Encoder knobs for the Armor v2 prototype.
+///
+/// This struct can be expanded further with additional encoder options in the future.
+/// It is strongly recommended to use the following pattern when creating new instances:
+///
+/// ```
+/// use phasm_core::{ArmorEncodeOpts, EncodePreference};
+///
+/// let opts = ArmorEncodeOpts {
+///     fortress_tl: EncodePreference::Forced,
+///     ..ArmorEncodeOpts::default()
+/// };
+/// # let _ = opts;
+/// ```
+///
+/// If you construct an instance manually, there is a risk of missing fields in the
+/// future.
 #[derive(Debug, Clone)]
 pub struct ArmorEncodeOpts {
     pub stdm: StdmVariant,
@@ -174,10 +252,34 @@ pub struct ArmorEncodeOpts {
     /// Fortress T (tiled layout + pilots, geometry-robust) instead of Fortress CC.
     pub fortress_tiled: bool,
     /// With Fortress T: Fortress TL (the AC-lane payload) for messages longer
-    /// than Fortress T holds.
-    pub fortress_tl: bool,
+    /// than Fortress T can accommodate in its tiled layout.
+    ///
+    /// Use [`EncodePreference`] to enforce or forbid the use of Fortress TL,
+    /// or allow it to be used automatically based on the encoder's decision (default).
+    ///
+    /// [`EncodePreference::Forced`] cannot select Fortress TL in two cases:
+    ///
+    /// - `force_stdm` is set: Fortress is skipped entirely and the message goes
+    ///   to STDM.
+    /// - `fortress_tiled` is off: Fortress TL needs the tiled layout. The
+    ///   message is written with Fortress CC (`fortress_cc: Some(_)`) or the
+    ///   original RS + repetition Fortress (`fortress_cc: None`) if it fits
+    ///   that, and otherwise fails with [`StegoError::MessageTooLarge`] rather
+    ///   than falling back to STDM.
+    pub fortress_tl: EncodePreference,
     /// Fortress T checkerboard sync amplitude (gray levels, busy blocks).
     pub sync_amp: f64,
+}
+
+impl EncodePreference {
+    /// Returns `true` if this preference indicates the encoder should never use the
+    /// mode.
+    ///
+    /// This is used to gate certain calculations or decisions which would be
+    /// unnecessary if the mode is banned.
+    pub fn is_never(&self) -> bool {
+        self == &EncodePreference::Never
+    }
 }
 
 impl Default for ArmorEncodeOpts {
@@ -194,12 +296,14 @@ impl Default for ArmorEncodeOpts {
             fortress_cc: Some(fortress::FortressCcParams::default()),
             settle_floor: true,
             fortress_tiled: true,
-            fortress_tl: true,
+            fortress_tl: Default::default(),
             sync_amp: fortress_tile::SYNC_AMP,
         }
     }
 }
 
+// TODO Consider a builder pattern for ArmorEncodeOpts to make it easier to construct
+// instances with custom options.
 impl ArmorEncodeOpts {
     /// The encoder of core <= 0.5.x (legacy STDM, no headroom), byte-compatible
     /// with the released decoders.
@@ -212,7 +316,7 @@ impl ArmorEncodeOpts {
             fortress_cc: None,
             settle_floor: false,
             fortress_tiled: false,
-            fortress_tl: false,
+            fortress_tl: EncodePreference::Never, // Preserving legacy behavior by never using Fortress TL.
             ..Self::default()
         }
     }
@@ -294,11 +398,20 @@ fn armor_encode_impl(
     // Fortress T for what it holds, then Fortress TL; both capacities are
     // key-free and computed here on the cover as given, exactly as
     // `armor_capacity_info` does (the HUD shows what is written).
-    let tl_plan = (opts.fortress_tiled && opts.fortress_tl && !opts.force_stdm).then(|| fortress_tl::Plan::new(&img));
+    let tl_plan = (opts.fortress_tiled && !opts.fortress_tl.is_never() && !opts.force_stdm).then(|| fortress_tl::Plan::new(&img));
+    // Fortress TL capacity (0 when TL is off); `max_fort` below picks from it and `t_max`.
+    let tl_max = tl_plan.as_ref().map_or(0, |p| p.max_frame_bytes());
     let t_max = if opts.fortress_tiled { fortress_tile::t_max_frame_bytes(&img) } else { 0 };
     if !opts.force_stdm
         && let Ok(max_fort) = match (&opts.fortress_cc, opts.fortress_tiled) {
-            (_, true) => Ok(t_max.max(tl_plan.as_ref().map_or(0, |p| p.max_frame_bytes()))),
+            (_, true) => Ok(match opts.fortress_tl {
+                // If Fortress TL is forced, use its maximum frame bytes.
+                EncodePreference::Forced => tl_max,
+                // If Fortress TL is banned, we don't need to consider its capacity.
+                EncodePreference::Never => t_max,
+                // Otherwise, take the maximum of Fortress T and TL.
+                EncodePreference::ByFrameSize => t_max.max(tl_max),
+            }),
             (Some(prm), false) => Ok(fortress::fortress_cc_max_frame_bytes(&img, prm)),
             (None, false) => fortress::fortress_max_frame_bytes_ext(&img, use_compact),
         } {
@@ -327,7 +440,13 @@ fn armor_encode_impl(
 
             let fort_result = match (&opts.fortress_cc, opts.fortress_tiled) {
                 (_, true) => {
-                    let tl = tl_plan.as_ref().filter(|_| fortress_frame.len() > t_max);
+                    let tl = tl_plan.as_ref().filter(|_| match opts.fortress_tl {
+                        // Deliberately omit a catch-all arm to ensure compile-time
+                        // exhaustiveness checking for EncodePreference variants.
+                        EncodePreference::Forced => true,
+                        EncodePreference::Never => false,
+                        EncodePreference::ByFrameSize => fortress_frame.len() > t_max,
+                    });
                     info.fortress_tl = tl.is_some();
                     fortress_tile::encode(&mut img, &fortress_frame, passphrase, opts.sync_amp, tl)?
                 }
@@ -372,6 +491,11 @@ fn armor_encode_impl(
                 delta: 12.0,
             });
             return Ok((stego_bytes, encode_quality));
+        }
+        if opts.fortress_tl == EncodePreference::Forced {
+            // Fortress TL is forced but the frame exceeds its capacity: fail
+            // rather than fall back to STDM silently.
+            return Err(StegoError::MessageTooLarge);
         }
     }
 
@@ -2790,9 +2914,9 @@ mod standard_switch_tests {
     #[test]
     fn force_standard_skips_fortress_and_quality_reports_the_mode() {
         let c = cover();
-        let (auto, q_auto) = armor_encode_with_options(&c, "short", "pw", false).unwrap();
+        let (auto, q_auto) = armor_encode_with_forced_standard(&c, "short", "pw", false).unwrap();
         assert!(q_auto.fortress, "a short message uses Fortress");
-        let (std, q_std) = armor_encode_with_options(&c, "short", "pw", true).unwrap();
+        let (std, q_std) = armor_encode_with_forced_standard(&c, "short", "pw", true).unwrap();
         assert!(!q_std.fortress, "forced Standard does not");
         assert_eq!(crate::stego::smart_decode(&auto, "pw").unwrap().1.fortress_used, true);
         assert_eq!(crate::stego::smart_decode(&std, "pw").unwrap().1.fortress_used, false);
@@ -2817,9 +2941,9 @@ mod standard_switch_tests {
         }
         let size = crate::stego::payload::compressed_payload_size(&msg, &[]);
         assert!(size > info.fortress_capacity, "beyond the passphrase capacity");
-        let (_, q) = armor_encode_with_options(&c, &msg, "", false).unwrap();
+        let (_, q) = armor_encode_with_forced_standard(&c, &msg, "", false).unwrap();
         assert!(q.fortress, "{size} B fits the compact frame");
-        let (_, q) = armor_encode_with_options(&c, &msg, "pw", false).unwrap();
+        let (_, q) = armor_encode_with_forced_standard(&c, &msg, "pw", false).unwrap();
         assert!(!q.fortress, "{size} B does not fit the passphrase frame");
     }
 
@@ -2848,8 +2972,8 @@ mod standard_switch_tests {
         let at = message_of_payload(info.fortress_capacity);
         let over = message_of_payload(info.fortress_capacity + 1);
         for pass in ["pw", "correct horse battery", "x", "Zuerich-2026", "phasm"] {
-            assert!(armor_encode_with_options(&c, &at, pass, false).unwrap().1.fortress, "{pass}: at capacity");
-            assert!(!armor_encode_with_options(&c, &over, pass, false).unwrap().1.fortress, "{pass}: one byte over");
+            assert!(armor_encode_with_forced_standard(&c, &at, pass, false).unwrap().1.fortress, "{pass}: at capacity");
+            assert!(!armor_encode_with_forced_standard(&c, &over, pass, false).unwrap().1.fortress, "{pass}: one byte over");
         }
     }
 }

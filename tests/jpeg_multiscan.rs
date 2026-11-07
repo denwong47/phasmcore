@@ -265,7 +265,7 @@ fn regenerate_armor_vector() {
     }
     let cover = phasm_core::deep_cover_jpeg(&px, w, h, phasm_core::ARMOR_COVER_QUALITY).unwrap();
     println!("capacity {:?}", phasm_core::armor_capacity_info(&cover).map(|c| (c.fortress_capacity, c.stdm_capacity)));
-    let (stego, q) = phasm_core::armor_encode_with_options(&cover, ARMOR_MESSAGE, ARMOR_PASS, false).unwrap();
+    let (stego, q) = phasm_core::armor_encode_with_forced_standard(&cover, ARMOR_MESSAGE, ARMOR_PASS, false).unwrap();
     assert!(q.fortress, "the message must take Fortress");
     let dir = Path::new(&std::env::var("PHASM_TMP").unwrap_or_else(|_| "/tmp".into())).join("phasm-multiscan");
     std::fs::create_dir_all(&dir).unwrap();

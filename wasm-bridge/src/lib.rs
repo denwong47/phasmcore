@@ -329,7 +329,7 @@ pub fn encode(
     LAST_ENCODE_FORTRESS.with(|c| c.set(None));
     let stego = match mode {
         // 3 = Armor with the user's Standard switch (Fortress off).
-        2 | 3 => phasm_core::armor_encode_with_options(image_bytes, message, passphrase, mode == 3).map(|(b, q)| {
+        2 | 3 => phasm_core::armor_encode_with_forced_standard(image_bytes, message, passphrase, mode == 3).map(|(b, q)| {
             LAST_ENCODE_FORTRESS.with(|c| c.set(Some(q.fortress)));
             b
         }),
@@ -460,7 +460,7 @@ pub fn encode_with_progress(
     check_domain()?;
     phasm_core::progress::set_wasm_callback(Some(on_progress.clone()));
     let result = match mode {
-        2 | 3 => phasm_core::armor_encode_with_options(image_bytes, message, passphrase, mode == 3).map(|(b, _)| b),
+        2 | 3 => phasm_core::armor_encode_with_forced_standard(image_bytes, message, passphrase, mode == 3).map(|(b, _)| b),
         _ => ghost_encode(image_bytes, message, passphrase),
     }
     .map_err(|e| JsError::new(&stego_error_message(&e)));
