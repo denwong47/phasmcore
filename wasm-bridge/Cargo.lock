@@ -386,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "phasm-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "aes-gcm-siv",
  "argon2",
@@ -661,7 +661,3 @@ name = "zeroize"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
-
-[[patch.unused]]
-name = "rav1e"
-version = "0.8.0"
